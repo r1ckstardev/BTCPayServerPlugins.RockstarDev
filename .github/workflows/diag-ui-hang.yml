@@ -43,13 +43,14 @@ jobs:
 
             -   name: Experiments
                 run: |
+                    set +e   # a failing test run must not end the step before its log is printed (run 36325066063 died that way)
                     export PATH="$PATH:$HOME/.dotnet/tools"
                     P=BTCPayServer.Plugins.Tests
                     run_box() {  # label seconds args...
                         label=$1; secs=$2; shift 2
                         echo "::group::$label ($*)"
                         start=$(date +%s)
-                        (cd $P && dotnet run --no-build -- "$@" -longRunning 60 -diagnostics > /tmp/$label.log 2>&1) &
+                        (cd $P && dotnet run -- "$@" -longRunning 60 -diagnostics > /tmp/$label.log 2>&1) &
                         runner=$!
                         for i in $(seq 1 "$secs"); do kill -0 $runner 2>/dev/null || break; sleep 1; done
                         if kill -0 $runner 2>/dev/null; then

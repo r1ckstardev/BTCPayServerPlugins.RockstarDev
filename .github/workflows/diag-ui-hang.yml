@@ -1,0 +1,79 @@
+name: DIAG - UI test hang (fork only, not for merge)
+
+# Temporary diagnostic for the two classes the main workflow leaves out because they hang
+# (PluginPermissionUITest, TransactionCounterPluginUITestStandalone). Runs only on pushes to
+# this branch on the r1ckstardev fork. Each run is timeboxed; a run that outlives its box
+# gets its managed thread stacks dumped with dotnet-stack before it is killed.
+
+on:
+    push:
+        branches: [ "jenny/diag-ui-hang" ]
+
+jobs:
+    diag:
+        runs-on: ubuntu-22.04
+        timeout-minutes: 75
+        env:
+            CI: true
+            BTCPAY_SERVER_URL: http://localhost:14142
+        steps:
+            -   uses: actions/checkout@v4
+                with:
+                    submodules: recursive
+
+            -   uses: actions/setup-dotnet@v4
+                with:
+                    dotnet-version: 10.0.x
+
+            -   name: Build solution
+                run: dotnet build -maxcpucount:1
+
+            -   name: Config Builder
+                run: dotnet run --project ConfigBuilder
+
+            -   name: Playwright browsers + dotnet-stack
+                run: |
+                    dotnet tool install --global Microsoft.Playwright.CLI
+                    dotnet tool install --global dotnet-stack
+                    export PATH="$PATH:$HOME/.dotnet/tools"
+                    playwright install --with-deps chromium
+
+            -   name: Start Docker containers
+                run: docker compose -f "submodules/btcpayserver/BTCPayServer.Tests/docker-compose.yml" up -d dev --build
+
+            -   name: Experiments
+                run: |
+                    export PATH="$PATH:$HOME/.dotnet/tools"
+                    P=BTCPayServer.Plugins.Tests
+                    run_box() {  # label seconds args...
+                        label=$1; secs=$2; shift 2
+                        echo "::group::$label ($*)"
+                        start=$(date +%s)
+                        (cd $P && dotnet run --no-build -- "$@" -longRunning 60 -diagnostics > /tmp/$label.log 2>&1) &
+                        runner=$!
+                        for i in $(seq 1 "$secs"); do kill -0 $runner 2>/dev/null || break; sleep 1; done
+                        if kill -0 $runner 2>/dev/null; then
+                            echo "RESULT $label: HUNG after ${secs}s"
+                            for pid in $(pgrep -f "$P" || true); do
+                                echo "=== managed stacks of pid $pid: $(tr '\0' ' ' < /proc/$pid/cmdline | cut -c1-160)"
+                                timeout 90 dotnet-stack report -p "$pid" 2>&1 | head -600 || true
+                            done
+                            pkill -f "$P" || true; sleep 5; pkill -9 -f "$P" || true
+                        else
+                            wait $runner; rc=$?
+                            echo "RESULT $label: exited rc=$rc after $(( $(date +%s) - start ))s"
+                        fi
+                        echo "--- summary lines"
+                        grep -E "Total:|\[FAIL\]|\[SKIP\]|long running|Starting:|Finished:" /tmp/$label.log | tail -40 || true
+                        echo "--- last 80 lines"
+                        tail -80 /tmp/$label.log
+                        echo "::endgroup::"
+                    }
+                    run_box A_permission_solo 480 -class "$P.PluginPermissionUITest"
+                    run_box B_counter_solo 480 -class "$P.TransactionCounterPluginUITestStandalone"
+                    run_box C_two_collections 480 -class "$P.WalletHistoryReloadPluginUITest" -class "$P.TransactionCounterPluginUITestStandalone"
+                    run_box D_two_collections_serial 480 -class "$P.WalletHistoryReloadPluginUITest" -class "$P.TransactionCounterPluginUITestStandalone" -parallel none
+
+            -   name: Cleanup Docker
+                if: ${{ always() }}
+                run: docker compose -f submodules/btcpayserver/BTCPayServer.Tests/docker-compose.yml down --volumes

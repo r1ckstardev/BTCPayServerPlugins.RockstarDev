@@ -70,10 +70,10 @@ jobs:
                         tail -80 /tmp/$label.log
                         echo "::endgroup::"
                     }
-                    run_box A_permission_solo 480 -class "$P.PluginPermissionUITest"
-                    run_box B_counter_solo 480 -class "$P.TransactionCounterPluginUITestStandalone"
-                    run_box C_two_collections 480 -class "$P.WalletHistoryReloadPluginUITest" -class "$P.TransactionCounterPluginUITestStandalone"
-                    run_box D_two_collections_serial 480 -class "$P.WalletHistoryReloadPluginUITest" -class "$P.TransactionCounterPluginUITestStandalone" -parallel none
+                    # Run 36325306191 (before the DisposeAsync fix): A permission solo HUNG in PlaywrightBaseTest.Dispose;
+                    # counter solo, two collections parallel and serial all passed. After the fix:
+                    run_box A2_permission_solo_fixed 600 -class "$P.PluginPermissionUITest"
+                    run_box F_all_playwright_trait_only 1500 -trait "Category=PlaywrightUITest"
 
             -   name: Cleanup Docker
                 if: ${{ always() }}
